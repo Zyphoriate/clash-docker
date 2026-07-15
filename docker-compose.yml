@@ -13,8 +13,8 @@ services:
       # Mount host directory for persistent config / subscription profiles
       - ./resources:/opt/clashctl/resources
     environment:
-      # 订阅地址，启动时自动拉取并激活
       - CLASH_SUBSCRIBE_URL=${CLASH_SUBSCRIBE_URL:-}
+      - SECRET=${SECRET:-}
       - TZ=Asia/Shanghai
     # For TUN mode, uncomment:
     # cap_add:

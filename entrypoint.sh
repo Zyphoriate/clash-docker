@@ -1,119 +1,54 @@
 #!/usr/bin/env bash
+# entrypoint.sh — 使用原项目 clashctl CLI 处理订阅、密钥、配置合并
 set -e
 
 CLASHCTL_HOME="${CLASHCTL_HOME:-/opt/clashctl}"
-RESOURCES_DIR="${CLASHCTL_HOME}/resources"
-CONFIG_BASE="${RESOURCES_DIR}/config.yaml"
-CONFIG_MIXIN="${RESOURCES_DIR}/mixin.yaml"
-CONFIG_RUNTIME="${RESOURCES_DIR}/runtime.yaml"
-PROFILES_DIR="${RESOURCES_DIR}/profiles"
-BIN_DIR="${CLASHCTL_HOME}/bin"
+export CLASHCTL_HOME
 
-mkdir -p "${RESOURCES_DIR}" "${PROFILES_DIR}"
+# ── 加载原项目环境与脚本 ──────────────────────────────────────────────────
+source "${CLASHCTL_HOME}/.env" 2>/dev/null || true
 
-# ── 1. Determine kernel binary ──────────────────────────────────────────────
-if [ -f "${BIN_DIR}/mihomo" ]; then
-    KERNEL_BIN="${BIN_DIR}/mihomo"
-elif [ -f "${BIN_DIR}/clash" ]; then
-    KERNEL_BIN="${BIN_DIR}/clash"
-else
-    echo "Error: No kernel binary found in ${BIN_DIR}"
-    exit 1
+for lib in "${CLASHCTL_HOME}/scripts/lib/"*.sh; do
+    [ -f "$lib" ] && source "$lib"
+done
+
+for cmd in "${CLASHCTL_HOME}/scripts/cmd/"*.sh; do
+    [[ "$cmd" != *clashctl.* ]] && [ -f "$cmd" ] && source "$cmd"
+done
+
+# ── 辅助：杀掉 nohup 模式启动的后台内核进程 ──────────────────────────────
+_stray_kill() {
+    local name="${CLASHCTL_KERNEL:-mihomo}"
+    pkill -x "$name" 2>/dev/null || true
+    sleep 0.3
+}
+
+# ── 1. 设置 Web 面板访问密钥 ─────────────────────────────────────────────
+if [ -n "${SECRET}" ]; then
+    echo "==> Setting dashboard secret..."
+    clashsecret "${SECRET}" || echo "==> WARNING: secret setup failed"
+    _stray_kill
 fi
-echo "==> Kernel: $(basename "${KERNEL_BIN}")"
 
-# ── 2. Handle subscription / config ────────────────────────────────────────
+# ── 2. 拉取并激活订阅 ────────────────────────────────────────────────────
 if [ -n "${CLASH_SUBSCRIBE_URL}" ]; then
-    echo "==> Downloading subscription: ${CLASH_SUBSCRIBE_URL}"
-
-    # Download with retry
-    SUB_TMP="${RESOURCES_DIR}/sub.tmp.yaml"
-    for i in 1 2 3; do
-        if curl -fsSL --connect-timeout 15 --retry 2 \
-            -A "mihomo" \
-            "${CLASH_SUBSCRIBE_URL}" -o "${SUB_TMP}"; then
-            break
-        fi
-        echo "==> Retry ${i}/3..."
-        sleep 2
-    done
-
-    # Validate: check file is non-empty and looks like YAML/Clash config
-    if [ ! -s "${SUB_TMP}" ]; then
-        echo "==> ERROR: Downloaded subscription is empty"
-        exit 1
-    fi
-
-    # Check if it's HTML (common when URL is wrong or needs auth)
-    if grep -qiE '^\s*<!DOCTYPE|<html|<head|<body' "${SUB_TMP}"; then
-        echo "==> ERROR: Subscription returned HTML, not a valid config (check your URL)"
-        exit 1
-    fi
-
-    # Remove BOM and normalize line endings
-    sed -i '1s/^\xEF\xBB\xBF//' "${SUB_TMP}"
-    sed -i 's/\r$//' "${SUB_TMP}"
-
-    # Check if it has proxies or proxy-providers (valid clash config)
-    if grep -qE '^\s*(proxies|proxy-providers):' "${SUB_TMP}"; then
-        echo "==> Valid Clash config detected"
-    else
-        # Might be a base64-encoded or encrypted subscription
-        # Try running through subconverter if available
-        if [ -f "${BIN_DIR}/subconverter/subconverter" ]; then
-            echo "==> Non-standard format, attempting subconverter..."
-            # (subconverter handling would go here)
-        fi
-        echo "==> Warning: config format may not be standard, trying anyway"
-    fi
-
-    # Save as profile and activate
-    cp "${SUB_TMP}" "${PROFILES_DIR}/1.yaml"
-    cp "${SUB_TMP}" "${CONFIG_BASE}"
-    rm -f "${SUB_TMP}"
-    echo "==> Subscription activated → ${CONFIG_BASE}"
-
-elif [ -f "${CONFIG_BASE}" ]; then
-    echo "==> Using existing config: ${CONFIG_BASE}"
-
-else
-    # No subscription, no existing config → generate minimal default
-    echo "==> No config found, generating default..."
-    cat > "${CONFIG_BASE}" << 'YAML'
-mixed-port: 7890
-allow-lan: true
-bind-address: "*"
-mode: rule
-log-level: info
-external-controller: 0.0.0.0:9090
-secret: ""
-
-proxies: []
-proxy-groups:
-  - name: PROXY
-    type: select
-    proxies:
-      - DIRECT
-rules:
-  - MATCH,DIRECT
-YAML
+    echo "==> Adding subscription: ${CLASH_SUBSCRIBE_URL}"
+    clashsub add --use "${CLASH_SUBSCRIBE_URL}" || echo "==> WARNING: subscription add failed"
+    _stray_kill
 fi
 
-# ── 3. Merge config (base + mixin → runtime) ──────────────────────────────
-if [ -f "${BIN_DIR}/yq" ] && [ -f "${CONFIG_MIXIN}" ] && [ -s "${CONFIG_MIXIN}" ]; then
-    echo "==> Merging mixin config..."
-    "${BIN_DIR}/yq" eval-all 'select(fileIndex == 0) * select(fileIndex == 1)' \
-        "${CONFIG_BASE}" "${CONFIG_MIXIN}" > "${CONFIG_RUNTIME}" 2>/dev/null || {
-        echo "==> Warning: yq merge failed, using base config only"
-        cp "${CONFIG_BASE}" "${CONFIG_RUNTIME}"
-    }
-else
-    cp "${CONFIG_BASE}" "${CONFIG_RUNTIME}"
-fi
+# ── 3. 合并 base + mixin → runtime ───────────────────────────────────────
+echo "==> Generating runtime config..."
+_merge_config 2>/dev/null || true
 
-# ── 4. Start kernel ────────────────────────────────────────────────────────
-echo "==> Starting $(basename "${KERNEL_BIN}")..."
-echo "==> Proxy:    0.0.0.0:7890 (HTTP/SOCKS mixed)"
-echo "==> API/UI:   0.0.0.0:9090"
+# ── 4. 确定内核二进制 ────────────────────────────────────────────────────
+KERNEL_BIN="${CLASHCTL_HOME}/bin/${CLASHCTL_KERNEL:-mihomo}"
+[ -x "$KERNEL_BIN" ] || KERNEL_BIN="${CLASHCTL_HOME}/bin/clash"
+[ -x "$KERNEL_BIN" ] || { echo "ERROR: no kernel binary found"; exit 1; }
 
-exec "${KERNEL_BIN}" -d "${RESOURCES_DIR}" -f "${CONFIG_RUNTIME}"
+RUNTIME_YAML="${CLASH_CONFIG_RUNTIME:-${CLASHCTL_HOME}/resources/runtime.yaml}"
+
+echo "==> Starting $(basename "$KERNEL_BIN")..."
+echo "==> Proxy: 0.0.0.0:7890 | API: 0.0.0.0:9090"
+
+exec "${KERNEL_BIN}" -d "${CLASH_RESOURCES_DIR}" -f "${RUNTIME_YAML}"
