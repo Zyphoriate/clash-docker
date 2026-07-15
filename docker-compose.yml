@@ -11,7 +11,7 @@ services:
       - "9090:9090"   # Web UI / REST API
     volumes:
       # Mount host directory for persistent config / subscription profiles
-      - ./resources:/opt/clashctl/resources
+      - ./resources:/root/clashctl/resources
     environment:
       - CLASH_SUBSCRIBE_URL=${CLASH_SUBSCRIBE_URL:-}
       - SECRET=${SECRET:-}
