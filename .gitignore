@@ -1,0 +1,20 @@
+# ── IDE / Editor ──
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+
+# ── Docker (don't bake config into image) ──
+resources/*
+!resources/.gitkeep
+
+# ── Claude ──
+.claude/
+
+# ── Env (subscription URL is sensitive) ──
+.env

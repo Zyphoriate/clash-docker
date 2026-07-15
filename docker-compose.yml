@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  clash:
+    build: .
+    container_name: clash
+    restart: unless-stopped
+    network_mode: bridge
+    ports:
+      - "7890:7890"   # HTTP/SOCKS mixed proxy port
+      - "9090:9090"   # Web UI / REST API
+    volumes:
+      # Mount host directory for persistent config / subscription profiles
+      - ./resources:/opt/clashctl/resources
+    environment:
+      # 订阅地址，启动时自动拉取并激活
+      - CLASH_SUBSCRIBE_URL=${CLASH_SUBSCRIBE_URL:-}
+      - TZ=Asia/Shanghai
+    # For TUN mode, uncomment:
+    # cap_add:
+    #   - NET_ADMIN
+    # devices:
+    #   - /dev/net/tun
