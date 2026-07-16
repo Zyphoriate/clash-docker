@@ -20,11 +20,18 @@ if [ -n "${CLASH_SUBSCRIBE_URL}" ]; then
     clashsub add --use "${CLASH_SUBSCRIBE_URL}" || echo "==> WARNING: subscription add failed, continuing..."
 fi
 
-# ── 2. 设置密钥（确保 mixin.yaml 存在，在启动前设好避免重启）───────────
+# ── 2. 设置 mixin（bind 0.0.0.0 + 密钥），然后应用合并 ─────────────────
+MIXIN="${CLASH_CONFIG_MIXIN:-${CLASHCTL_HOME}/resources/mixin.yaml}"
+touch "${MIXIN}"
+"${BIN_YQ}" -i '.allow-lan = true | ."bind-address" = "*"' "${MIXIN}" 2>/dev/null || true
+
 if [ -n "${SECRET}" ]; then
     echo "==> Setting secret..."
-    touch "${CLASH_CONFIG_MIXIN:-${CLASHCTL_HOME}/resources/mixin.yaml}"
     clashsecret "${SECRET}" || echo "==> WARNING: secret setup failed"
+    # clashsecret 内部已调用 _merge_config_restart
+else
+    echo "==> Applying mixin..."
+    _merge_config_restart 2>/dev/null || true
 fi
 
 # ── 3. 启动代理 ──────────────────────────────────────────────────────────
