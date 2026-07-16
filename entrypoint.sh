@@ -31,26 +31,8 @@ fi
 echo "==> Starting via clashctl..."
 clashon || { echo "==> ERROR: clashon failed"; exit 1; }
 
-# ── 4. 保活：跟踪内核 PID，崩溃时打印日志 ────────────────────────────────
-KERNEL="${CLASHCTL_KERNEL:-mihomo}"
-LOG_FILE="${CLASH_RESOURCES_DIR:-${CLASHCTL_HOME}/resources}/${KERNEL}.log"
-
-for i in $(seq 1 10); do
-    PID=$(pgrep -x "$KERNEL" 2>/dev/null | head -1)
-    [ -n "$PID" ] && break
-    sleep 0.5
-done
-
-if [ -z "$PID" ]; then
-    echo "==> ERROR: ${KERNEL} failed to start"
-    echo "==> Last 50 lines of log:"
-    tail -50 "${LOG_FILE}" 2>/dev/null || true
-    exit 1
-fi
-
-echo "==> ${KERNEL} running (PID ${PID})"
-wait "$PID" 2>/dev/null
-
-echo "==> ${KERNEL} exited (PID ${PID}), last 50 lines of log:"
-tail -50 "${LOG_FILE}" 2>/dev/null || true
-exit 1
+# ── 4. 保活：tail -f 项目日志（nohup 模式输出到此文件）──────────────────
+LOG_FILE="${CLASH_RESOURCES_DIR:-${CLASHCTL_HOME}/resources}/${CLASHCTL_KERNEL:-mihomo}.log"
+touch "${LOG_FILE}"
+echo "==> Tailing log: ${LOG_FILE}"
+exec tail -f "${LOG_FILE}"
