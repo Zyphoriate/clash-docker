@@ -14,37 +14,43 @@ for cmd in "${CLASHCTL_HOME}/scripts/cmd/"*.sh; do
     [[ "$cmd" != *clashctl.* ]] && [ -f "$cmd" ] && source "$cmd"
 done
 
-# ── 1. 拉取订阅 ──────────────────────────────────────────────────────────
+# ── 1. 拉取订阅（已存在则跳过）───────────────────────────────────────────
 if [ -n "${CLASH_SUBSCRIBE_URL}" ]; then
     echo "==> Adding subscription..."
     clashsub add --use "${CLASH_SUBSCRIBE_URL}" || echo "==> WARNING: subscription add failed, continuing..."
 fi
 
-# ── 2. 启动代理 ──────────────────────────────────────────────────────────
-echo "==> Starting via clashctl..."
-clashon || { echo "==> ERROR: clashon failed"; exit 1; }
-
-# ── 3. 设置访问密钥（启动后 mixin.yaml 才存在）───────────────────────────
+# ── 2. 设置密钥（确保 mixin.yaml 存在，在启动前设好避免重启）───────────
 if [ -n "${SECRET}" ]; then
     echo "==> Setting secret..."
+    touch "${CLASH_CONFIG_MIXIN:-${CLASHCTL_HOME}/resources/mixin.yaml}"
     clashsecret "${SECRET}" || echo "==> WARNING: secret setup failed"
 fi
 
-# ── 4. 保活 ──────────────────────────────────────────────────────────────
-KERNEL="${CLASHCTL_KERNEL:-mihomo}"
-echo "==> Waiting for ${KERNEL}..."
+# ── 3. 启动代理 ──────────────────────────────────────────────────────────
+echo "==> Starting via clashctl..."
+clashon || { echo "==> ERROR: clashon failed"; exit 1; }
 
-# Wait for the kernel process to settle, then track its PID
+# ── 4. 保活：跟踪内核 PID，崩溃时打印日志 ────────────────────────────────
+KERNEL="${CLASHCTL_KERNEL:-mihomo}"
+LOG_FILE="${CLASH_RESOURCES_DIR:-${CLASHCTL_HOME}/resources}/${KERNEL}.log"
+
 for i in $(seq 1 10); do
     PID=$(pgrep -x "$KERNEL" 2>/dev/null | head -1)
     [ -n "$PID" ] && break
-    sleep 1
+    sleep 0.5
 done
 
-if [ -n "$PID" ]; then
-    echo "==> ${KERNEL} running (PID ${PID}), keeping container alive..."
-    wait "$PID" 2>/dev/null
-else
-    echo "==> ERROR: ${KERNEL} not running"
+if [ -z "$PID" ]; then
+    echo "==> ERROR: ${KERNEL} failed to start"
+    echo "==> Last 50 lines of log:"
+    tail -50 "${LOG_FILE}" 2>/dev/null || true
     exit 1
 fi
+
+echo "==> ${KERNEL} running (PID ${PID})"
+wait "$PID" 2>/dev/null
+
+echo "==> ${KERNEL} exited (PID ${PID}), last 50 lines of log:"
+tail -50 "${LOG_FILE}" 2>/dev/null || true
+exit 1
